@@ -6,12 +6,16 @@ import re
 
 app = FastAPI()
 
-# ========== হোম পেজ ==========
+# ============================================================
+# ১. হোম পেজ
+# ============================================================
 @app.get("/")
 def root():
     return {"message": "API Running"}
 
-# ========== শুধু রিটার্ন (পুরোনো) ==========
+# ============================================================
+# ২. টেস্ট এন্ডপয়েন্ট (শুধু ডেটা রিটার্ন করে)
+# ============================================================
 @app.get("/shopii")
 def shopii(
     cc: str = Query(...),
@@ -20,7 +24,9 @@ def shopii(
 ):
     return {"cc": cc, "site": site, "proxy": proxy}
 
-# ========== Shopify চেকার (আপডেটেড প্রক্সি সাপোর্ট) ==========
+# ============================================================
+# ৩. Shopify কার্ড চেকার (প্রক্সি সহ)
+# ============================================================
 @app.get("/shopify")
 def shopify_checker(
     site: str = Query(...),
@@ -29,22 +35,22 @@ def shopify_checker(
 ):
     start_time = time.time()
     
-    # ===== কার্ড ডেটা পার্স =====
+    # কার্ড ডেটা পার্স
     card_parts = cc.split("|")
     if len(card_parts) != 4:
         return {"error": "Invalid card format. Use cc|mm|yy|cvv"}
     card_number, month, year, cvv = card_parts
     
-    # ===== প্রক্সি পার্স (সব ফরম্যাট সাপোর্ট) =====
+    # প্রক্সি পার্স
     proxy_config = parse_proxy(proxy)
     if "error" in proxy_config:
         return proxy_config
     
-    # ===== Shopify কার্ট URL =====
+    # Shopify কার্ট URL
     clean_site = site.replace("https://", "").replace("http://", "").strip("/")
     checkout_url = f"https://{clean_site}/cart.json"
     
-    # ===== পেমেন্ট ডেটা =====
+    # পেমেন্ট ডেটা
     payment_data = {
         "credit_card": {
             "number": card_number,
@@ -55,7 +61,6 @@ def shopify_checker(
     }
     
     try:
-        # ===== প্রক্সি সহ রিকোয়েস্ট =====
         response = requests.post(
             checkout_url,
             json=payment_data,
@@ -71,7 +76,6 @@ def shopify_checker(
         elapsed_time = round(time.time() - start_time, 2)
         result = response.json()
         
-        # ===== রেসপন্স প্রসেস =====
         if "error" in result:
             status = "CARD_DECLINED"
             approved = False
@@ -102,7 +106,79 @@ def shopify_checker(
         return {"error": str(e)}
 
 # ============================================================
-# 🛠️ প্রক্সি পার্স ফাংশন (সব ফরম্যাট সাপোর্ট)
+# ৪. সাইট হেলথ চেকার (Alive/Dead চেক)
+# ============================================================
+@app.get("/check-site")
+def check_site(site: str = Query(...)):
+    """
+    যেকোনো সাইট Alive নাকি Dead চেক করে
+    Example: /check-site?site=https://lebzone.com
+    """
+    try:
+        clean_site = site.replace("https://", "").replace("http://", "").strip("/")
+        
+        # HTTP এবং HTTPS দুইটাই চেক করি
+        for protocol in ["https", "http"]:
+            try:
+                response = requests.get(
+                    f"{protocol}://{clean_site}",
+                    timeout=10,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                        "Accept": "text/html"
+                    },
+                    allow_redirects=True
+                )
+                
+                if response.status_code == 200:
+                    return {
+                        "site": site,
+                        "status": "ALIVE",
+                        "code": response.status_code,
+                        "protocol": protocol,
+                        "response_time": response.elapsed.total_seconds()
+                    }
+                elif response.status_code in [301, 302, 303, 307, 308]:
+                    return {
+                        "site": site,
+                        "status": "ALIVE (REDIRECT)",
+                        "code": response.status_code,
+                        "protocol": protocol,
+                        "redirect_url": response.headers.get("Location", "Unknown"),
+                        "response_time": response.elapsed.total_seconds()
+                    }
+                else:
+                    # 404, 500 ইত্যাদি
+                    return {
+                        "site": site,
+                        "status": "DEAD (ERROR)",
+                        "code": response.status_code,
+                        "protocol": protocol,
+                        "response_time": response.elapsed.total_seconds()
+                    }
+            except requests.exceptions.Timeout:
+                continue
+            except requests.exceptions.ConnectionError:
+                continue
+            except Exception:
+                continue
+        
+        # দুটো প্রোটোকলেই কাজ না করলে
+        return {
+            "site": site,
+            "status": "DEAD",
+            "error": "Site unreachable via HTTP or HTTPS"
+        }
+        
+    except Exception as e:
+        return {
+            "site": site,
+            "status": "ERROR",
+            "error": str(e)
+        }
+
+# ============================================================
+# ৫. প্রক্সি পার্স ফাংশন (সব ফরম্যাট সাপোর্ট)
 # ============================================================
 def parse_proxy(proxy_str):
     """
