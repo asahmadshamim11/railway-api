@@ -2,6 +2,7 @@ from fastapi import FastAPI, Query
 import requests
 import json
 import time
+import re
 
 app = FastAPI()
 
@@ -19,7 +20,7 @@ def shopii(
 ):
     return {"cc": cc, "site": site, "proxy": proxy}
 
-# ========== Shopify চেকার (নতুন) ==========
+# ========== Shopify চেকার (আপডেটেড প্রক্সি সাপোর্ট) ==========
 @app.get("/shopify")
 def shopify_checker(
     site: str = Query(...),
@@ -28,29 +29,22 @@ def shopify_checker(
 ):
     start_time = time.time()
     
-    # কার্ড ডেটা পার্স
+    # ===== কার্ড ডেটা পার্স =====
     card_parts = cc.split("|")
     if len(card_parts) != 4:
         return {"error": "Invalid card format. Use cc|mm|yy|cvv"}
     card_number, month, year, cvv = card_parts
     
-    # প্রক্সি পার্স
-    proxy_parts = proxy.split(":")
-    if len(proxy_parts) != 4:
-        return {"error": "Invalid proxy format. Use ip:port:user:pass"}
-    proxy_ip, proxy_port, proxy_user, proxy_pass = proxy_parts
+    # ===== প্রক্সি পার্স (সব ফরম্যাট সাপোর্ট) =====
+    proxy_config = parse_proxy(proxy)
+    if "error" in proxy_config:
+        return proxy_config
     
-    # প্রক্সি ডিকশনারি
-    proxies = {
-        "http": f"http://{proxy_user}:{proxy_pass}@{proxy_ip}:{proxy_port}",
-        "https": f"http://{proxy_user}:{proxy_pass}@{proxy_ip}:{proxy_port}"
-    }
-    
-    # Shopify কার্ট URL
-    clean_site = site.replace("https://", "").replace("http://", "")
+    # ===== Shopify কার্ট URL =====
+    clean_site = site.replace("https://", "").replace("http://", "").strip("/")
     checkout_url = f"https://{clean_site}/cart.json"
     
-    # পেমেন্ট ডেটা
+    # ===== পেমেন্ট ডেটা =====
     payment_data = {
         "credit_card": {
             "number": card_number,
@@ -61,10 +55,11 @@ def shopify_checker(
     }
     
     try:
+        # ===== প্রক্সি সহ রিকোয়েস্ট =====
         response = requests.post(
             checkout_url,
             json=payment_data,
-            proxies=proxies,
+            proxies=proxy_config["proxies"],
             timeout=15,
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -76,7 +71,7 @@ def shopify_checker(
         elapsed_time = round(time.time() - start_time, 2)
         result = response.json()
         
-        # স্ট্যাটাস চেক
+        # ===== রেসপন্স প্রসেস =====
         if "error" in result:
             status = "CARD_DECLINED"
             approved = False
@@ -95,10 +90,76 @@ def shopify_checker(
             "Site": site,
             "Charged": str(approved),
             "Approved": str(approved),
-            "Time": f"{elapsed_time}s"
+            "Time": f"{elapsed_time}s",
+            "Proxy": proxy_config["type"]
         }
         
     except requests.exceptions.Timeout:
         return {"error": "Request timed out. Try a faster proxy."}
+    except requests.exceptions.ProxyError as e:
+        return {"error": f"Proxy Error: {str(e)}. Check your proxy credentials."}
     except Exception as e:
         return {"error": str(e)}
+
+# ============================================================
+# 🛠️ প্রক্সি পার্স ফাংশন (সব ফরম্যাট সাপোর্ট)
+# ============================================================
+def parse_proxy(proxy_str):
+    """
+    সাপোর্টেড ফরম্যাট:
+    1. ip:port:user:pass
+    2. user:pass@ip:port
+    3. http://user:pass@ip:port
+    4. ip:port (auth ছাড়া)
+    """
+    proxy_str = proxy_str.strip()
+    
+    # ফরম্যাট ১: ip:port:user:pass
+    parts = proxy_str.split(":")
+    if len(parts) == 4:
+        ip, port, user, password = parts
+        proxy_url = f"http://{user}:{password}@{ip}:{port}"
+        return {
+            "type": "Authenticated",
+            "proxies": {
+                "http": proxy_url,
+                "https": proxy_url
+            }
+        }
+    
+    # ফরম্যাট ২: user:pass@ip:port
+    if "@" in proxy_str and "://" not in proxy_str:
+        auth, host = proxy_str.split("@")
+        if ":" in auth:
+            user, password = auth.split(":")
+            proxy_url = f"http://{user}:{password}@{host}"
+            return {
+                "type": "Authenticated",
+                "proxies": {
+                    "http": proxy_url,
+                    "https": proxy_url
+                }
+            }
+    
+    # ফরম্যাট ৩: http://user:pass@ip:port
+    if "://" in proxy_str:
+        proxy_url = proxy_str
+        return {
+            "type": "Authenticated (URL)",
+            "proxies": {
+                "http": proxy_url,
+                "https": proxy_url.replace("http://", "https://")
+            }
+        }
+    
+    # ফরম্যাট ৪: ip:port (auth ছাড়া)
+    if ":" in proxy_str and len(proxy_str.split(":")) == 2:
+        return {
+            "type": "Unauthenticated",
+            "proxies": {
+                "http": f"http://{proxy_str}",
+                "https": f"http://{proxy_str}"
+            }
+        }
+    
+    return {"error": "Invalid proxy format. Supported: ip:port:user:pass, user:pass@ip:port, ip:port"}
